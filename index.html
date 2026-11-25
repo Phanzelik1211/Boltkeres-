@@ -227,7 +227,9 @@
   const REFETCH_M = 150;          // re-search after moving this far
   const SERVERS = [
     'https://overpass-api.de/api/interpreter',
-    'https://overpass.kumi.systems/api/interpreter'
+    'https://overpass.private.coffee/api/interpreter',
+    'https://overpass.kumi.systems/api/interpreter',
+    'https://maps.mail.ru/osm/tools/overpass/api/interpreter'
   ];
 
   const state = {
@@ -363,39 +365,80 @@
     $('sheet-title').textContent = 'Boltok keresése…';
     $('sheet-sub').textContent = state.label;
 
-    const q = `[out:json][timeout:10];nwr["shop"~"^(supermarket|convenience|grocery|greengrocer|general)$"](around:${RADIUS},${lat},${lng});out center 60;`;
-    let data = null, failed = true;
-    for (const s of SERVERS) {
-      try {
-        const res = await fetch(`${s}?data=${encodeURIComponent(q)}`, { signal: AbortSignal.timeout(9000) });
-        if (res.ok) { data = await res.json(); failed = false; break; }
-      } catch (e) { /* try next server */ }
+    let shops = null, reason = '';
+    try { shops = await overpassShops(lat, lng); }
+    catch (e) {
+      reason = (e.errors ? e.errors.map(x => x.message).join(' | ') : e.message) || '';
+      console.warn('Overpass failed:', reason);
+      try { shops = await nominatimShops(lat, lng); }
+      catch (e2) { reason += ' | ' + e2.message; console.warn('Nominatim failed:', e2); }
     }
 
     state.fetching = false;
     $('fab-locate').classList.remove('searching');
 
-    if (failed) {
+    if (!shops) {
       state.shops = [];
       state.error = true;
+      state.errReason = reason;
       state.lastFetch = null; // allow retry
     } else {
       state.error = false;
-      state.shops = (data.elements || []).map(el => {
+      state.shops = shops;
+      recomputeDistances();
+    }
+    render();
+  }
+
+  // Ask all Overpass servers at once, use whichever answers first
+  function overpassShops(lat, lng) {
+    const q = `[out:json][timeout:25];nwr["shop"~"^(supermarket|convenience|grocery|greengrocer|general)$"](around:${RADIUS},${lat},${lng});out center 60;`;
+    return Promise.any(SERVERS.map(async url => {
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: 'data=' + encodeURIComponent(q),
+        signal: AbortSignal.timeout(25000)
+      });
+      if (!res.ok) throw new Error(new URL(url).hostname + ' HTTP ' + res.status);
+      const j = await res.json();
+      if (!j.elements) throw new Error(new URL(url).hostname + ' bad reply');
+      return j.elements.map(el => {
         const t = el.tags || {};
         const la = el.lat ?? el.center?.lat, lo = el.lon ?? el.center?.lon;
         if (la == null || lo == null) return null;
-        const addr = [t['addr:street'], t['addr:housenumber']].filter(Boolean).join(' ');
         return {
           id: el.type + el.id,
           name: t.name || t.brand || t.operator || 'Élelmiszerbolt',
           type: t.shop === 'supermarket' ? 'supermarket' : 'small',
-          lat: la, lng: lo, addr, hours: t.opening_hours || '', d: 0
+          lat: la, lng: lo,
+          addr: [t['addr:street'], t['addr:housenumber']].filter(Boolean).join(' '),
+          hours: t.opening_hours || '', d: 0
         };
       }).filter(Boolean);
-      recomputeDistances();
-    }
-    render();
+    }));
+  }
+
+  // Backup source: Nominatim search inside the area
+  async function nominatimShops(lat, lng) {
+    const dLat = RADIUS / 111320, dLng = RADIUS / (111320 * Math.cos(toRad(lat)));
+    const vb = `${lng - dLng},${lat + dLat},${lng + dLng},${lat - dLat}`;
+    const terms = [['supermarket', 'supermarket'], ['convenience store', 'small'], ['grocery', 'small']];
+    const seen = new Map();
+    await Promise.all(terms.map(async ([term, type]) => {
+      const r = await fetch(`https://nominatim.openstreetmap.org/search?format=json&limit=20&bounded=1&accept-language=hu&viewbox=${vb}&q=${encodeURIComponent(term)}`,
+        { signal: AbortSignal.timeout(12000) });
+      if (!r.ok) throw new Error('Nominatim HTTP ' + r.status);
+      (await r.json()).forEach(it => {
+        const id = it.osm_type + it.osm_id;
+        if (seen.has(id)) return;
+        seen.set(id, {
+          id, name: it.name || it.display_name.split(',')[0], type,
+          lat: parseFloat(it.lat), lng: parseFloat(it.lon), addr: '', hours: '', d: 0
+        });
+      });
+    }));
+    return [...seen.values()];
   }
 
   function recomputeDistances() {
@@ -413,7 +456,7 @@
 
     if (state.error) {
       $('sheet-title').textContent = 'Nem sikerült betölteni a boltokat';
-      $('sheet-sub').textContent = 'Ellenőrizd az internetkapcsolatot.';
+      $('sheet-sub').textContent = state.errReason ? state.errReason.slice(0, 140) : 'Ellenőrizd az internetkapcsolatot.';
       list.innerHTML = '<div class="empty">A bolt-adatbázis most nem válaszol.<br><button id="retry">Újrapróbálom</button></div>';
       $('retry').onclick = () => { const a = state.anchor || { lat: BUDAPEST[0], lng: BUDAPEST[1] }; fetchShops(a.lat, a.lng); };
       return;
