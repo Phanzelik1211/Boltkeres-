@@ -1,0 +1,636 @@
+<!DOCTYPE html>
+<html lang="hu">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>BoltKereső</title>
+
+<meta name="theme-color" content="#ffffff">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="BoltKereső">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icon-192.png">
+<link rel="icon" href="icon-192.png">
+
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+<style>
+  :root {
+    --blue: #1a73e8;
+    --green: #188038;
+    --green-bg: #e6f4ea;
+    --red: #d93025;
+    --text: #202124;
+    --muted: #5f6368;
+    --line: #e3e5e8;
+    --surface: #ffffff;
+    --surface-2: #f1f3f4;
+    --shadow: 0 2px 8px rgba(60,64,67,.3), 0 1px 2px rgba(60,64,67,.2);
+    --sat: env(safe-area-inset-top, 0px);
+    --sab: env(safe-area-inset-bottom, 0px);
+    --sheet-h: 150px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --text: #e8eaed; --muted: #9aa0a6; --line: #3c4043;
+      --surface: #202124; --surface-2: #303134; --green-bg: #1e3a2a; --green: #81c995;
+      --shadow: 0 2px 8px rgba(0,0,0,.6);
+    }
+    .leaflet-tile-pane { filter: brightness(.75) contrast(1.05) saturate(.85); }
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+  html, body { height: 100%; width: 100%; overflow: hidden; overscroll-behavior: none; }
+  body {
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    color: var(--text); background: var(--surface-2);
+  }
+  button { font: inherit; color: inherit; border: 0; background: none; cursor: pointer; }
+
+  #map { position: fixed; inset: 0; z-index: 1; }
+  .leaflet-control-zoom { display: none; }
+  .leaflet-control-attribution { font-size: 9px; margin-bottom: calc(var(--sheet-h) + var(--sab)) !important; transition: margin .25s; }
+
+  /* Floating search bar */
+  #topbar {
+    position: fixed; z-index: 1000; left: 12px; right: 12px;
+    top: calc(var(--sat) + 12px);
+  }
+  .search {
+    display: flex; align-items: center; gap: 4px;
+    background: var(--surface); border-radius: 28px; box-shadow: var(--shadow);
+    padding: 0 6px 0 16px; height: 50px;
+  }
+  .search input {
+    flex: 1; min-width: 0; border: 0; outline: 0; background: transparent;
+    color: var(--text); font-size: 16px; height: 100%;
+  }
+  .search input::placeholder { color: var(--muted); }
+  .icon-btn {
+    width: 40px; height: 40px; border-radius: 50%;
+    display: grid; place-items: center; color: var(--muted);
+  }
+  .icon-btn:active { background: var(--surface-2); }
+  .icon-btn svg { width: 22px; height: 22px; fill: currentColor; }
+
+  #suggestions {
+    display: none; margin-top: 6px; background: var(--surface);
+    border-radius: 16px; box-shadow: var(--shadow); overflow: hidden; max-height: 40vh; overflow-y: auto;
+  }
+  #suggestions button {
+    display: block; width: 100%; text-align: left; padding: 12px 16px; font-size: 14px;
+    border-bottom: 1px solid var(--line); line-height: 1.3;
+  }
+  #suggestions button:last-child { border-bottom: 0; }
+  #suggestions button:active { background: var(--surface-2); }
+
+  .chips { display: flex; gap: 8px; margin-top: 10px; overflow-x: auto; scrollbar-width: none; padding-bottom: 4px; }
+  .chips::-webkit-scrollbar { display: none; }
+  .chip {
+    flex: none; background: var(--surface); border-radius: 18px; padding: 7px 14px;
+    font-size: 13px; font-weight: 500; box-shadow: var(--shadow); white-space: nowrap;
+  }
+  .chip.on { background: #d2e3fc; color: #174ea6; }
+  @media (prefers-color-scheme: dark) { .chip.on { background: #3b4a66; color: #aecbfa; } }
+  #search-area { display: none; background: var(--blue); color: #fff; }
+
+  /* Floating action buttons */
+  #fabs {
+    position: fixed; z-index: 1000; right: 12px;
+    bottom: calc(var(--sheet-h) + var(--sab) + 14px);
+    display: flex; flex-direction: column; gap: 10px; transition: bottom .25s;
+  }
+  .fab {
+    width: 48px; height: 48px; border-radius: 50%; background: var(--surface);
+    box-shadow: var(--shadow); display: grid; place-items: center; color: var(--muted);
+  }
+  .fab svg { width: 24px; height: 24px; fill: currentColor; }
+  .fab.active { color: var(--blue); }
+  .fab.searching svg { animation: spin 1s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* Bottom sheet */
+  #sheet {
+    position: fixed; z-index: 1000; left: 0; right: 0; bottom: 0;
+    height: calc(var(--sheet-h) + var(--sab));
+    background: var(--surface); border-radius: 18px 18px 0 0;
+    box-shadow: 0 -2px 10px rgba(0,0,0,.25);
+    display: flex; flex-direction: column; transition: height .25s ease;
+    padding-bottom: var(--sab);
+  }
+  #sheet.dragging, #sheet.dragging ~ #fabs { transition: none; }
+  #grab { padding: 10px 0 4px; touch-action: none; cursor: grab; }
+  #grab::before { content: ""; display: block; width: 36px; height: 4px; border-radius: 2px; background: var(--line); margin: 0 auto; }
+  #sheet-head { padding: 4px 16px 10px; touch-action: none; }
+  #sheet-title { font-size: 17px; font-weight: 600; }
+  #sheet-sub { font-size: 13px; color: var(--muted); margin-top: 2px; }
+  #list { overflow-y: auto; flex: 1; overscroll-behavior: contain; border-top: 1px solid var(--line); }
+
+  .shop { display: flex; gap: 12px; align-items: center; padding: 12px 16px; border-bottom: 1px solid var(--line); }
+  .shop:active { background: var(--surface-2); }
+  .shop.closest { background: var(--green-bg); }
+  .pin {
+    flex: none; width: 34px; height: 34px; border-radius: 50%; background: var(--red); color: #fff;
+    display: grid; place-items: center; font-weight: 700; font-size: 14px;
+  }
+  .shop.closest .pin { background: var(--green); color: #fff; }
+  .shop-main { flex: 1; min-width: 0; }
+  .shop-name { font-size: 15px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .shop-meta { font-size: 13px; color: var(--muted); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .shop-meta b { color: var(--green); font-weight: 600; }
+  .go {
+    flex: none; background: var(--blue); color: #fff; border-radius: 20px; padding: 9px 14px;
+    font-size: 13px; font-weight: 600; text-decoration: none; display: flex; align-items: center; gap: 6px;
+  }
+  .go svg { width: 16px; height: 16px; fill: currentColor; }
+  .empty { padding: 28px 20px; text-align: center; color: var(--muted); font-size: 14px; line-height: 1.5; }
+  .empty button { margin-top: 12px; background: var(--blue); color: #fff; padding: 10px 18px; border-radius: 20px; font-weight: 600; }
+
+  /* Banners / toast */
+  #banner {
+    position: fixed; z-index: 1500; left: 12px; right: 12px; bottom: calc(var(--sheet-h) + var(--sab) + 74px);
+    background: #323232; color: #fff; padding: 12px 16px; border-radius: 12px; font-size: 14px;
+    display: none; align-items: center; gap: 12px; line-height: 1.35;
+  }
+  #banner button { margin-left: auto; color: #8ab4f8; font-weight: 600; white-space: nowrap; }
+
+  /* User marker */
+  .me { position: relative; width: 22px; height: 22px; }
+  .me .dot { position: absolute; inset: 3px; background: var(--blue); border: 3px solid #fff; border-radius: 50%; box-shadow: 0 1px 6px rgba(0,0,0,.45); }
+  .me .pulse { position: absolute; inset: 0; border-radius: 50%; background: rgba(26,115,232,.35); animation: pulse 2s ease-out infinite; }
+  .me .cone {
+    position: absolute; left: 50%; top: 50%; width: 0; height: 0; display: none;
+    border-left: 14px solid transparent; border-right: 14px solid transparent; border-bottom: 32px solid rgba(26,115,232,.35);
+    transform-origin: 50% 100%; margin-left: -14px; margin-top: -32px;
+  }
+  @keyframes pulse { 0% { transform: scale(.6); opacity: 1; } 100% { transform: scale(2.4); opacity: 0; } }
+  @media (prefers-reduced-motion: reduce) { .me .pulse, .fab.searching svg { animation: none; } }
+
+  .shop-pin {
+    width: 28px; height: 28px; border-radius: 50% 50% 50% 0; transform: rotate(-45deg);
+    background: var(--red); border: 2px solid #fff; box-shadow: 0 1px 5px rgba(0,0,0,.4);
+    display: grid; place-items: center;
+  }
+  .shop-pin span { transform: rotate(45deg); color: #fff; font-size: 12px; font-weight: 700; }
+  .shop-pin.best { background: var(--green); width: 34px; height: 34px; }
+  .leaflet-popup-content { font-size: 14px; line-height: 1.4; }
+</style>
+</head>
+<body>
+
+<div id="map"></div>
+
+<div id="topbar">
+  <div class="search">
+    <input id="q" type="search" enterkeyhint="search" autocomplete="off" placeholder="Keresés címre vagy városra" aria-label="Keresés">
+    <button class="icon-btn" id="clear" aria-label="Törlés" style="display:none">
+      <svg viewBox="0 0 24 24"><path d="M19 6.4 17.6 5 12 10.6 6.4 5 5 6.4 10.6 12 5 17.6 6.4 19 12 13.4 17.6 19 19 17.6 13.4 12z"/></svg>
+    </button>
+    <button class="icon-btn" id="go-search" aria-label="Keresés">
+      <svg viewBox="0 0 24 24"><path d="M15.5 14h-.8l-.3-.3A6.5 6.5 0 1 0 14 15.5l.3.3v.8l5 5 1.5-1.5-5-5zm-6 0a4.5 4.5 0 1 1 0-9 4.5 4.5 0 0 1 0 9z"/></svg>
+    </button>
+  </div>
+  <div id="suggestions"></div>
+  <div class="chips" id="chips">
+    <button class="chip on" data-f="all">Mind</button>
+    <button class="chip" data-f="supermarket">Szupermarket</button>
+    <button class="chip" data-f="small">Kisbolt</button>
+    <button class="chip" id="search-area">Keresés ezen a területen</button>
+  </div>
+</div>
+
+<div id="fabs">
+  <button class="fab" id="fab-locate" aria-label="Saját pozíció">
+    <svg viewBox="0 0 24 24"><path d="M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8zm8.9 3A9 9 0 0 0 13 3.1V1h-2v2.1A9 9 0 0 0 3.1 11H1v2h2.1A9 9 0 0 0 11 20.9V23h2v-2.1a9 9 0 0 0 7.9-7.9H23v-2h-2.1zM12 19a7 7 0 1 1 0-14 7 7 0 0 1 0 14z"/></svg>
+  </button>
+</div>
+
+<div id="banner"><span id="banner-text"></span><button id="banner-btn"></button></div>
+
+<section id="sheet" aria-live="polite">
+  <div id="grab" aria-hidden="true"></div>
+  <div id="sheet-head">
+    <div id="sheet-title">Pozíció meghatározása…</div>
+    <div id="sheet-sub">Engedélyezd a helymeghatározást a böngészőben.</div>
+  </div>
+  <div id="list"></div>
+</section>
+
+<script>
+(() => {
+  const $ = id => document.getElementById(id);
+  const BUDAPEST = [47.4979, 19.0402];
+  const RADIUS = 1500;            // m
+  const REFETCH_M = 150;          // re-search after moving this far
+  const SERVERS = [
+    'https://overpass-api.de/api/interpreter',
+    'https://overpass.kumi.systems/api/interpreter'
+  ];
+
+  const state = {
+    gps: null,            // {lat, lng, acc, heading}
+    anchor: null,         // center used for shop search + distances
+    mode: 'gps',          // 'gps' | 'custom'
+    follow: true,
+    shops: [],
+    filter: 'all',
+    lastFetch: null,
+    fetching: false,
+    firstFix: false
+  };
+
+  /* ---------- Map ---------- */
+  const map = L.map('map', { zoomControl: false, attributionControl: true }).setView(BUDAPEST, 13);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    maxZoom: 19, attribution: '© OpenStreetMap'
+  }).addTo(map);
+
+  const meIcon = L.divIcon({
+    className: '', iconSize: [22, 22], iconAnchor: [11, 11],
+    html: '<div class="me"><div class="pulse"></div><div class="cone" id="cone"></div><div class="dot"></div></div>'
+  });
+  const meMarker = L.marker(BUDAPEST, { icon: meIcon, interactive: false, zIndexOffset: 1000 });
+  const accCircle = L.circle(BUDAPEST, { radius: 0, weight: 1, color: '#1a73e8', fillColor: '#1a73e8', fillOpacity: .12, interactive: false });
+  const shopLayer = L.layerGroup().addTo(map);
+  let searchPin = null;
+
+  /* ---------- Helpers ---------- */
+  const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
+  const toRad = d => d * Math.PI / 180;
+  function dist(a, b, c, d) { // meters
+    const R = 6371000, dLat = toRad(c - a), dLon = toRad(d - b);
+    const x = Math.sin(dLat/2)**2 + Math.cos(toRad(a)) * Math.cos(toRad(c)) * Math.sin(dLon/2)**2;
+    return 2 * R * Math.atan2(Math.sqrt(x), Math.sqrt(1 - x));
+  }
+  const fmtDist = m => m < 1000 ? `${Math.round(m / 10) * 10} m` : `${(m / 1000).toFixed(1)} km`;
+  const walkMin = m => Math.max(1, Math.round(m / 80)); // ~4.8 km/h
+  const isApple = /iPhone|iPad|iPod|Macintosh/.test(navigator.userAgent) && 'ontouchend' in document;
+  const routeUrl = s => isApple
+    ? `https://maps.apple.com/?daddr=${s.lat},${s.lng}&dirflg=w`
+    : `https://www.google.com/maps/dir/?api=1&destination=${s.lat},${s.lng}&travelmode=walking`;
+
+  function showBanner(text, btnLabel, onBtn) {
+    $('banner-text').textContent = text;
+    const b = $('banner-btn');
+    b.textContent = btnLabel || '';
+    b.style.display = btnLabel ? '' : 'none';
+    b.onclick = () => { $('banner').style.display = 'none'; onBtn && onBtn(); };
+    $('banner').style.display = 'flex';
+  }
+  const hideBanner = () => { $('banner').style.display = 'none'; };
+
+  /* ---------- Live position ---------- */
+  let watchId = null;
+  function startWatch() {
+    if (!navigator.geolocation) {
+      showBanner('Ez az eszköz nem támogatja a helymeghatározást.', 'Budapest', () => useFallback());
+      return;
+    }
+    if (watchId !== null) navigator.geolocation.clearWatch(watchId);
+    watchId = navigator.geolocation.watchPosition(onPosition, onPosError, {
+      enableHighAccuracy: true, maximumAge: 2000, timeout: 20000
+    });
+  }
+
+  function onPosition(p) {
+    hideBanner();
+    const { latitude: lat, longitude: lng, accuracy: acc, heading } = p.coords;
+    state.gps = { lat, lng, acc, heading };
+
+    if (!meMarker._map) { meMarker.addTo(map); accCircle.addTo(map); }
+    meMarker.setLatLng([lat, lng]);
+    accCircle.setLatLng([lat, lng]).setRadius(acc);
+
+    const cone = $('cone');
+    if (cone) {
+      if (heading != null && !isNaN(heading)) {
+        cone.style.display = 'block';
+        cone.style.transform = `rotate(${heading}deg)`;
+      } else cone.style.display = 'none';
+    }
+
+    if (!state.firstFix) {
+      state.firstFix = true;
+      map.setView([lat, lng], 16, { animate: true });
+    } else if (state.follow && state.mode === 'gps') {
+      map.panTo([lat, lng], { animate: true, duration: .6 });
+    }
+
+    if (state.mode === 'gps') {
+      state.anchor = { lat, lng };
+      const moved = !state.lastFetch || dist(lat, lng, state.lastFetch.lat, state.lastFetch.lng) > REFETCH_M;
+      if (moved) fetchShops(lat, lng);
+      else { recomputeDistances(); render(); }
+    }
+    updateFab();
+  }
+
+  function onPosError(err) {
+    const msgs = {
+      1: 'Nincs engedély a helyhez. Engedélyezd a böngésző vagy a telefon beállításaiban.',
+      2: 'A pozíció most nem érhető el. Próbáld szabad ég alatt.',
+      3: 'A helymeghatározás túl sokáig tartott.'
+    };
+    if (!state.gps) {
+      $('sheet-title').textContent = 'Nincs pozíció';
+      $('sheet-sub').textContent = 'Keress egy címet, vagy próbáld újra.';
+      showBanner(msgs[err.code] || 'Helymeghatározási hiba.', 'Újra', startWatch);
+      if (!state.anchor) useFallback(true);
+    } else if (err.code === 1) {
+      showBanner(msgs[1]);
+    }
+  }
+
+  function useFallback(silent) {
+    state.mode = 'custom';
+    state.anchor = { lat: BUDAPEST[0], lng: BUDAPEST[1] };
+    map.setView(BUDAPEST, 14);
+    fetchShops(BUDAPEST[0], BUDAPEST[1], 'Budapest belváros');
+    if (!silent) hideBanner();
+  }
+
+  /* ---------- Shops (OpenStreetMap / Overpass) ---------- */
+  async function fetchShops(lat, lng, label) {
+    if (state.fetching) return;
+    state.fetching = true;
+    $('fab-locate').classList.add('searching');
+    state.lastFetch = { lat, lng };
+    if (label) state.label = label;
+    else state.label = state.mode === 'gps' ? 'A közeledben' : 'A kiválasztott területen';
+    $('sheet-title').textContent = 'Boltok keresése…';
+    $('sheet-sub').textContent = state.label;
+
+    const q = `[out:json][timeout:10];nwr["shop"~"^(supermarket|convenience|grocery|greengrocer|general)$"](around:${RADIUS},${lat},${lng});out center 60;`;
+    let data = null, failed = true;
+    for (const s of SERVERS) {
+      try {
+        const res = await fetch(`${s}?data=${encodeURIComponent(q)}`, { signal: AbortSignal.timeout(9000) });
+        if (res.ok) { data = await res.json(); failed = false; break; }
+      } catch (e) { /* try next server */ }
+    }
+
+    state.fetching = false;
+    $('fab-locate').classList.remove('searching');
+
+    if (failed) {
+      state.shops = [];
+      state.error = true;
+      state.lastFetch = null; // allow retry
+    } else {
+      state.error = false;
+      state.shops = (data.elements || []).map(el => {
+        const t = el.tags || {};
+        const la = el.lat ?? el.center?.lat, lo = el.lon ?? el.center?.lon;
+        if (la == null || lo == null) return null;
+        const addr = [t['addr:street'], t['addr:housenumber']].filter(Boolean).join(' ');
+        return {
+          id: el.type + el.id,
+          name: t.name || t.brand || t.operator || 'Élelmiszerbolt',
+          type: t.shop === 'supermarket' ? 'supermarket' : 'small',
+          lat: la, lng: lo, addr, hours: t.opening_hours || '', d: 0
+        };
+      }).filter(Boolean);
+      recomputeDistances();
+    }
+    render();
+  }
+
+  function recomputeDistances() {
+    const a = state.anchor; if (!a) return;
+    state.shops.forEach(s => s.d = dist(a.lat, a.lng, s.lat, s.lng));
+    state.shops.sort((x, y) => x.d - y.d);
+  }
+
+  const visible = () => state.shops.filter(s => state.filter === 'all' || s.type === state.filter);
+
+  function render() {
+    const list = $('list'), shops = visible();
+    list.innerHTML = '';
+    shopLayer.clearLayers();
+
+    if (state.error) {
+      $('sheet-title').textContent = 'Nem sikerült betölteni a boltokat';
+      $('sheet-sub').textContent = 'Ellenőrizd az internetkapcsolatot.';
+      list.innerHTML = '<div class="empty">A bolt-adatbázis most nem válaszol.<br><button id="retry">Újrapróbálom</button></div>';
+      $('retry').onclick = () => { const a = state.anchor || { lat: BUDAPEST[0], lng: BUDAPEST[1] }; fetchShops(a.lat, a.lng); };
+      return;
+    }
+
+    if (!shops.length) {
+      $('sheet-title').textContent = 'Nincs bolt a közelben';
+      $('sheet-sub').textContent = `${fmtDist(RADIUS)} sugarú körben nem találtam boltot.`;
+      list.innerHTML = '<div class="empty">Próbálj másik szűrőt, vagy told el a térképet és keress ott.</div>';
+      return;
+    }
+
+    const best = shops[0];
+    $('sheet-title').textContent = `Legközelebbi: ${best.name}`;
+    $('sheet-sub').textContent = `${fmtDist(best.d)} · ${walkMin(best.d)} perc gyalog · ${shops.length} bolt`;
+
+    shops.forEach((s, i) => {
+      const isBest = i === 0;
+      const icon = L.divIcon({
+        className: '', iconSize: isBest ? [34, 34] : [28, 28], iconAnchor: isBest ? [17, 34] : [14, 28],
+        html: `<div class="shop-pin${isBest ? ' best' : ''}"><span>${i + 1}</span></div>`
+      });
+      const m = L.marker([s.lat, s.lng], { icon, zIndexOffset: isBest ? 500 : 0 }).addTo(shopLayer)
+        .bindPopup(`<b>${esc(s.name)}</b><br>${fmtDist(s.d)} · ${walkMin(s.d)} perc gyalog`
+          + `<br><a href="${routeUrl(s)}" target="_blank" rel="noopener">Útvonal</a>`);
+      s._marker = m;
+
+      const row = document.createElement('div');
+      row.className = 'shop' + (isBest ? ' closest' : '');
+      const meta = [
+        `${fmtDist(s.d)} · ${walkMin(s.d)} perc`,
+        s.addr, s.hours
+      ].filter(Boolean).map(esc).join(' · ');
+      row.innerHTML = `
+        <div class="pin">${i + 1}</div>
+        <div class="shop-main">
+          <div class="shop-name">${esc(s.name)}</div>
+          <div class="shop-meta">${isBest ? '<b>Legközelebbi</b> · ' : ''}${meta}</div>
+        </div>
+        <a class="go" href="${routeUrl(s)}" target="_blank" rel="noopener">
+          <svg viewBox="0 0 24 24"><path d="M21.7 11.3 12.7 2.3a1 1 0 0 0-1.4 0l-9 9a1 1 0 0 0 0 1.4l9 9a1 1 0 0 0 1.4 0l9-9a1 1 0 0 0 0-1.4zM14 14v-3H10v4H8v-5a1 1 0 0 1 1-1h5V6l4 4z"/></svg>
+          Útvonal
+        </a>`;
+      row.onclick = e => {
+        if (e.target.closest('.go')) return;
+        state.follow = false; updateFab();
+        map.setView([s.lat, s.lng], 17, { animate: true });
+        m.openPopup();
+        setSheet('peek');
+      };
+      list.appendChild(row);
+    });
+  }
+
+  /* ---------- Search (Nominatim) ---------- */
+  let debounce;
+  const q = $('q'), sug = $('suggestions');
+  q.addEventListener('input', () => {
+    $('clear').style.display = q.value ? '' : 'none';
+    clearTimeout(debounce);
+    if (q.value.trim().length < 3) { sug.style.display = 'none'; return; }
+    debounce = setTimeout(async () => {
+      try {
+        const r = await fetch(`https://nominatim.openstreetmap.org/search?format=json&limit=5&accept-language=hu&q=${encodeURIComponent(q.value)}`);
+        showSuggestions(await r.json());
+      } catch (e) { sug.style.display = 'none'; }
+    }, 350);
+  });
+  q.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); runSearch(); } });
+  $('go-search').onclick = runSearch;
+  $('clear').onclick = () => { q.value = ''; sug.style.display = 'none'; $('clear').style.display = 'none'; q.focus(); };
+
+  async function runSearch() {
+    const v = q.value.trim(); if (!v) return;
+    try {
+      const r = await fetch(`https://nominatim.openstreetmap.org/search?format=json&limit=1&accept-language=hu&q=${encodeURIComponent(v)}`);
+      const d = await r.json();
+      if (d.length) pickPlace(d[0]); else showBanner('Nem találtam ilyen helyet.', 'OK');
+    } catch (e) { showBanner('A keresés nem sikerült. Ellenőrizd a kapcsolatot.', 'OK'); }
+  }
+
+  function showSuggestions(list) {
+    sug.innerHTML = '';
+    if (!list.length) { sug.style.display = 'none'; return; }
+    list.forEach(it => {
+      const b = document.createElement('button');
+      b.textContent = it.display_name;
+      b.onclick = () => pickPlace(it);
+      sug.appendChild(b);
+    });
+    sug.style.display = 'block';
+  }
+
+  function pickPlace(it) {
+    sug.style.display = 'none';
+    q.blur();
+    const name = it.display_name.split(',')[0];
+    q.value = name; $('clear').style.display = '';
+    const lat = parseFloat(it.lat), lng = parseFloat(it.lon);
+    goCustom(lat, lng, name, true);
+  }
+
+  function goCustom(lat, lng, label, pin) {
+    state.mode = 'custom'; state.follow = false;
+    state.anchor = { lat, lng };
+    if (searchPin) map.removeLayer(searchPin);
+    searchPin = pin ? L.marker([lat, lng], { interactive: false }).addTo(map) : null;
+    $('search-area').style.display = 'none';
+    map.setView([lat, lng], 16);
+    fetchShops(lat, lng, label);
+    updateFab();
+  }
+
+  /* ---------- Locate button / follow mode ---------- */
+  function updateFab() {
+    $('fab-locate').classList.toggle('active', state.follow && state.mode === 'gps' && !!state.gps);
+  }
+  $('fab-locate').onclick = () => {
+    if (searchPin) { map.removeLayer(searchPin); searchPin = null; }
+    q.value = ''; $('clear').style.display = 'none';
+    state.mode = 'gps'; state.follow = true;
+    $('search-area').style.display = 'none';
+    if (state.gps) {
+      map.setView([state.gps.lat, state.gps.lng], Math.max(map.getZoom(), 16), { animate: true });
+      state.anchor = { lat: state.gps.lat, lng: state.gps.lng };
+      fetchShops(state.gps.lat, state.gps.lng);
+    } else startWatch();
+    updateFab();
+  };
+
+  // Stop following when the user drags the map; offer "search this area"
+  map.on('dragstart', () => { state.follow = false; updateFab(); });
+  map.on('moveend', () => {
+    if (state.follow) return;
+    const c = map.getCenter();
+    const ref = state.lastFetch || state.anchor;
+    const far = !ref || dist(c.lat, c.lng, ref.lat, ref.lng) > 500;
+    $('search-area').style.display = far ? '' : 'none';
+  });
+  $('search-area').onclick = () => {
+    const c = map.getCenter();
+    goCustom(c.lat, c.lng, 'A térkép közepe körül', false);
+  };
+
+  /* ---------- Filters ---------- */
+  $('chips').addEventListener('click', e => {
+    const c = e.target.closest('.chip[data-f]'); if (!c) return;
+    document.querySelectorAll('.chip[data-f]').forEach(x => x.classList.toggle('on', x === c));
+    state.filter = c.dataset.f;
+    render();
+  });
+
+  /* ---------- Bottom sheet (drag) ---------- */
+  const sheet = $('sheet');
+  const heights = () => ({ peek: 150, half: Math.round(innerHeight * .5), full: Math.round(innerHeight * .82) });
+  let sheetState = 'peek';
+  function setSheet(name) {
+    sheetState = name;
+    document.documentElement.style.setProperty('--sheet-h', heights()[name] + 'px');
+  }
+  setSheet('peek');
+  addEventListener('resize', () => setSheet(sheetState));
+
+  let drag = null;
+  function onDown(e) {
+    drag = { y: e.clientY, h: heights()[sheetState], moved: false };
+    sheet.classList.add('dragging');
+    e.currentTarget.setPointerCapture(e.pointerId);
+  }
+  function onMove(e) {
+    if (!drag) return;
+    const dy = drag.y - e.clientY;
+    if (Math.abs(dy) > 4) drag.moved = true;
+    const h = Math.min(heights().full, Math.max(110, drag.h + dy));
+    document.documentElement.style.setProperty('--sheet-h', h + 'px');
+  }
+  function onUp(e) {
+    if (!drag) return;
+    sheet.classList.remove('dragging');
+    const h = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--sheet-h'));
+    const H = heights();
+    if (!drag.moved) {
+      setSheet(sheetState === 'peek' ? 'half' : 'peek');
+    } else {
+      const nearest = Object.keys(H).reduce((a, b) => Math.abs(H[a] - h) < Math.abs(H[b] - h) ? a : b);
+      setSheet(nearest);
+    }
+    drag = null;
+  }
+  ['grab', 'sheet-head'].forEach(id => {
+    const el = $(id);
+    el.addEventListener('pointerdown', onDown);
+    el.addEventListener('pointermove', onMove);
+    el.addEventListener('pointerup', onUp);
+    el.addEventListener('pointercancel', onUp);
+  });
+
+  /* ---------- Resume tracking when the app returns to the foreground ---------- */
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') startWatch();
+  });
+
+  /* ---------- PWA ---------- */
+  if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
+    navigator.serviceWorker.register('sw.js').catch(() => {});
+  }
+  let installEvt = null;
+  addEventListener('beforeinstallprompt', e => {
+    e.preventDefault(); installEvt = e;
+    showBanner('Telepítsd az appot a kezdőképernyőre.', 'Telepítés', async () => {
+      installEvt.prompt(); await installEvt.userChoice; installEvt = null;
+    });
+  });
+
+  /* ---------- Go ---------- */
+  startWatch();
+})();
+</script>
+</body>
+</html>
